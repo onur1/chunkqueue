@@ -56,7 +56,7 @@ func main() {
 
 ### Batch Insert Example
 ```go
-chunkQueue := NewChunkQueue
+chunkQueue := NewChunkQueue[int](4)
 
 // Add a batch of items to the queue
 chunkQueue.AddBatch([]int{1, 2, 3, 4, 5})
