@@ -1,6 +1,7 @@
 package chunkqueue
 
 import (
+	"errors"
 	"sync"
 )
 
@@ -20,20 +21,35 @@ func NewChunkQueue[T any](maxChunk int) *ChunkQueue[T] {
 	return q
 }
 
+// ErrQueueClosed is returned when adding to a closed queue.
+var ErrQueueClosed = errors.New("queue is closed")
+
 // Add adds a single item to the queue.
-func (q *ChunkQueue[T]) Add(item T) {
+func (q *ChunkQueue[T]) Add(item T) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	if q.isClosed {
+		return ErrQueueClosed
+	}
+
 	q.data = append(q.data, item)
 	q.cond.Signal()
+	return nil
 }
 
 // AddBatch adds multiple items to the queue in one operation.
-func (q *ChunkQueue[T]) AddBatch(items []T) {
+func (q *ChunkQueue[T]) AddBatch(items []T) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	if q.isClosed {
+		return ErrQueueClosed
+	}
+
 	q.data = append(q.data, items...)
 	q.cond.Broadcast()
+	return nil
 }
 
 // ReadChunk reads a chunk of up to maxChunk items from the queue.
