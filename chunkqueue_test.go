@@ -2,200 +2,306 @@ package chunkqueue_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/onur1/chunkqueue"
 )
 
-func TestAddAndReadChunk(t *testing.T) {
-	chunkQueue := chunkqueue.NewChunkQueue[int](5)
+func TestPushPopBasic(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int]()
 
-	go func() {
-		chunkQueue.Add(1)
-		chunkQueue.Add(2)
-		chunkQueue.Add(3)
-		chunkQueue.Add(4)
-		chunkQueue.Add(5)
-		chunkQueue.Close()
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 
-	expectedChunks := [][]int{
-		{1, 2, 3, 4, 5},
-	}
-
-	for _, expectedChunk := range expectedChunks {
-		chunk, ok := chunkQueue.ReadChunk()
-		if !ok {
-			t.Fatalf("Expected chunk but got none")
-		}
-		if !equal(expectedChunk, chunk) {
-			t.Errorf("Expected %v, got %v", expectedChunk, chunk)
+	// Push some items
+	for i := 1; i <= 5; i++ {
+		err := q.Push(ctx, i)
+		if err != nil {
+			t.Errorf("Unexpected error pushing item: %v", err)
 		}
 	}
 
-	if chunk, ok := chunkQueue.ReadChunk(); ok {
-		t.Errorf("Expected no more chunks, but got %v", chunk)
+	// Pop items in batches
+	for i := 0; i < 3; i++ {
+		batch, err := q.Pop(ctx, 2)
+		if err != nil {
+			t.Errorf("Unexpected error popping items: %v", err)
+		}
+		fmt.Printf("Popped batch: %v\n", batch)
 	}
 }
 
-func TestAddBatchAndReadChunk(t *testing.T) {
-	chunkQueue := chunkqueue.NewChunkQueue[int](5)
-
-	go func() {
-		chunkQueue.AddBatch([]int{1, 2, 3, 4, 5, 6, 7})
-		chunkQueue.Close()
-	}()
-
-	expectedChunks := [][]int{
-		{1, 2, 3, 4, 5},
-		{6, 7},
-	}
-
-	for _, expectedChunk := range expectedChunks {
-		chunk, ok := chunkQueue.ReadChunk()
-		if !ok {
-			t.Fatalf("Expected chunk but got none")
-		}
-		if !equal(expectedChunk, chunk) {
-			t.Errorf("Expected %v, got %v", expectedChunk, chunk)
-		}
-	}
-
-	if chunk, ok := chunkQueue.ReadChunk(); ok {
-		t.Errorf("Expected no more chunks, but got %v", chunk)
-	}
-}
-
-func TestConcurrentAddAndRead(t *testing.T) {
-	chunkQueue := chunkqueue.NewChunkQueue[int](5)
-
-	go func() {
-		for i := 1; i <= 10; i++ {
-			chunkQueue.Add(i)
-			time.Sleep(time.Millisecond * 10)
-		}
-		chunkQueue.Close()
-	}()
-
-	readCount := 0
-	for {
-		chunk, ok := chunkQueue.ReadChunk()
-		if !ok {
-			break
-		}
-		readCount += len(chunk)
-	}
-
-	if readCount != 10 {
-		t.Errorf("Expected to read 10 items, but got %d", readCount)
-	}
-}
-
-func TestAddAndReadClosedQueue(t *testing.T) {
-	chunkQueue := chunkqueue.NewChunkQueue[int](5)
-	chunkQueue.Close()
-
-	err := chunkQueue.Add(1)
-	if err != chunkqueue.ErrQueueClosed {
-		t.Errorf("Expected ErrQueueClosed, got %v", err)
-	}
-
-	chunk, ok := chunkQueue.ReadChunk()
-	if ok {
-		t.Fatal("Expected no chunk from closed queue, but got one")
-	}
-	if chunk != nil {
-		t.Fatalf("Expected no chunk, but got %v", chunk)
-	}
-}
-
-func TestReadChunkWithContextCancel(t *testing.T) {
-	chunkQueue := chunkqueue.NewChunkQueue[int](5)
+func TestPushPopWithContextCancel(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int]()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Simulate adding items with a delay
-	go func() {
-		time.Sleep(time.Millisecond * 50)
-		chunkQueue.AddBatch([]int{1, 2, 3, 4, 5})
-	}()
-
-	// Cancel the context before the item is added
-	cancel()
-
-	// Attempt to read a chunk
-	chunk, ok, err := chunkQueue.ReadChunkWithContext(ctx)
-	if err == nil {
-		t.Fatal("Expected context cancellation error, got nil")
-	}
-	if ok {
-		t.Fatal("Expected no chunk, but got a valid chunk")
-	}
-	if chunk != nil {
-		t.Fatalf("Expected no chunk, but got %v", chunk)
-	}
-}
-
-func TestReadChunkWithContextTimeout(t *testing.T) {
-	chunkQueue := chunkqueue.NewChunkQueue[int](5)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
-	defer cancel()
-
-	// Simulate adding items after the timeout
-	go func() {
-		time.Sleep(time.Millisecond * 100)
-		chunkQueue.AddBatch([]int{1, 2, 3, 4, 5})
-	}()
-
-	// Attempt to read a chunk
-	chunk, ok, err := chunkQueue.ReadChunkWithContext(ctx)
-	if err == nil || err != context.DeadlineExceeded {
-		t.Fatalf("Expected context deadline exceeded error, got %v", err)
-	}
-	if ok {
-		t.Fatal("Expected no chunk, but got a valid chunk")
-	}
-	if chunk != nil {
-		t.Fatalf("Expected no chunk, but got %v", chunk)
-	}
-}
-
-func TestReadChunkWithContextSuccess(t *testing.T) {
-	chunkQueue := chunkqueue.NewChunkQueue[int](5)
-
-	ctx := context.Background()
-
-	// Simulate adding items
-	go func() {
-		time.Sleep(time.Millisecond * 50)
-		chunkQueue.AddBatch([]int{1, 2, 3, 4, 5})
-	}()
-
-	// Attempt to read a chunk
-	chunk, ok, err := chunkQueue.ReadChunkWithContext(ctx)
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
-	if !ok {
-		t.Fatal("Expected a valid chunk, but got none")
-	}
-	expected := []int{1, 2, 3, 4, 5}
-	if !equal(expected, chunk) {
-		t.Errorf("Expected %v, got %v", expected, chunk)
-	}
-}
-
-// Helper function to compare slices
-func equal[T comparable](a, b []T) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	// Push some items
+	for i := 1; i <= 5; i++ {
+		err := q.Push(ctx, i)
+		if err != nil {
+			t.Errorf("Unexpected error pushing item: %v", err)
 		}
 	}
-	return true
+	cancel()
+
+	// Pop should be canceled due to context timeout
+	_, err := q.Pop(ctx, 2)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Expected context cancellation error, got: %v", err)
+	}
+}
+
+func TestPushPopWithContextTimeout(t *testing.T) {
+	queue := chunkqueue.NewChunkQueue[int]()
+	defer queue.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	// Producer: Simulate pushing items into the queue
+	go func() {
+		defer wg.Done()
+		for i := 1; i <= 10; i++ {
+			err := queue.Push(ctx, i)
+			if err != nil {
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("Expected context deadline exceeded error, got: %v", err)
+				}
+				return
+			}
+			time.Sleep(50 * time.Millisecond) // Simulate production delay
+		}
+	}()
+
+	wg.Add(1)
+	// Consumer: Simulate requesting batches from the queue
+	go func() {
+		defer wg.Done()
+		for {
+			time.Sleep(200 * time.Millisecond) // Simulate production delay
+			batch, err := queue.Pop(ctx, 3)    // Fetch up to 3 items at a time
+			if err != nil {
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("Expected context deadline exceeded error, got: %v", err)
+				}
+				return
+			}
+			if ok := slices.Equal(batch, []int{1, 2, 3}); !ok {
+				t.Errorf("Batch value not valid: %q", batch)
+			}
+		}
+	}()
+
+	// Let the program run until context expires
+	<-ctx.Done()
+
+	wg.Wait()
+}
+
+func TestPushPopClosedQueue(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[string]()
+
+	// Close the queue
+	q.Close()
+
+	// Close twice actually to cover q.closed == true
+	q.Close()
+
+	// Push should fail due to closed queue
+	err := q.Push(context.Background(), "item")
+	if err != chunkqueue.ErrQueueClosed {
+		t.Errorf("Expected ErrQueueClosed when pushing to closed queue, got: %v", err)
+	}
+
+	// Pop should fail due to closed queue
+	_, err = q.Pop(context.Background(), 2)
+	if err != chunkqueue.ErrQueueClosed {
+		t.Errorf("Expected ErrQueueClosed when popping from closed queue, got: %v", err)
+	}
+}
+
+func TestPopEmptyQueue(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int]()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Pop from an empty queue should wait
+	ch := make(chan struct{})
+	go func() {
+		_, err := q.Pop(ctx, 2)
+		if err != nil {
+			t.Errorf("Unexpected error popping from empty queue: %v", err)
+		}
+		ch <- struct{}{}
+	}()
+
+	// Simulate pushing an item after a short delay
+	time.Sleep(50 * time.Millisecond)
+	err := q.Push(ctx, 1)
+	if err != nil {
+		t.Errorf("Unexpected error pushing item: %v", err)
+	}
+
+	// Wait for the pop operation to complete
+	<-ch
+}
+
+func TestPopBatchSize(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[string]()
+	ctx := context.Background()
+
+	// Push 3 items
+	for i := 0; i < 3; i++ {
+		err := q.Push(ctx, fmt.Sprintf("item-%d", i))
+		if err != nil {
+			t.Fatalf("Unexpected error pushing item: %v", err)
+		}
+	}
+
+	// Pop with a batch size of 2
+	batch, err := q.Pop(ctx, 2)
+	if err != nil {
+		t.Fatalf("Unexpected error popping items: %v", err)
+	}
+	if len(batch) != 2 {
+		t.Fatalf("Expected batch size of 2, got %d", len(batch))
+	}
+
+	// Pop the remaining item
+	batch, err = q.Pop(ctx, 2)
+	if err != nil {
+		t.Fatalf("Unexpected error popping item: %v", err)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("Expected batch size of 1, got %d", len(batch))
+	}
+}
+
+func TestLargeVolumePushPop(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int]()
+	ctx := context.Background()
+
+	const itemCount = 1_000_000
+	go func() {
+		for i := 0; i < itemCount; i++ {
+			_ = q.Push(ctx, i)
+		}
+		q.Close()
+	}()
+
+	popped := 0
+	for {
+		batch, err := q.Pop(ctx, 1000)
+		if err == chunkqueue.ErrQueueClosed {
+			break
+		}
+		popped += len(batch)
+	}
+
+	if popped != itemCount {
+		t.Errorf("Expected to pop %d items, got %d", itemCount, popped)
+	}
+}
+
+func TestConcurrentAccess(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int]()
+	ctx := context.Background()
+	const producerCount, consumerCount, itemsPerProducer = 3, 2, 100
+
+	var producerWg sync.WaitGroup
+	var consumerWg sync.WaitGroup
+
+	// Producers
+	for p := 0; p < producerCount; p++ {
+		producerWg.Add(1)
+		go func(p int) {
+			defer producerWg.Done()
+			for i := 0; i < itemsPerProducer; i++ {
+				_ = q.Push(ctx, p*itemsPerProducer+i)
+			}
+		}(p)
+	}
+
+	// Consumers
+	popped := make(chan int, producerCount*itemsPerProducer)
+	for c := 0; c < consumerCount; c++ {
+		consumerWg.Add(1)
+		go func() {
+			defer consumerWg.Done()
+			for {
+				batch, err := q.Pop(ctx, 10)
+				if err == chunkqueue.ErrQueueClosed {
+					return
+				}
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+					return
+				}
+				for _, item := range batch {
+					popped <- item
+				}
+			}
+		}()
+	}
+
+	// Close the queue after all producers are done
+	go func() {
+		producerWg.Wait() // Wait for all producers to finish
+		q.Close()         // Close the queue
+	}()
+
+	// Wait for all consumers to finish
+	consumerWg.Wait()
+	close(popped) // Close the popped channel after consumers are done
+
+	// Verify all items are consumed
+	seen := make(map[int]bool)
+	for item := range popped {
+		if seen[item] {
+			t.Errorf("Duplicate item: %d", item)
+		}
+		seen[item] = true
+	}
+
+	expectedItems := producerCount * itemsPerProducer
+	if len(seen) != expectedItems {
+		t.Errorf("Expected %d unique items, got %d", expectedItems, len(seen))
+	}
+}
+
+func TestCloseDuringPushPop(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int]()
+	ctx := context.Background()
+
+	go func() {
+		for i := 0; i < 50; i++ {
+			time.Sleep(10 * time.Millisecond)
+			_ = q.Push(ctx, i)
+		}
+	}()
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		q.Close()
+	}()
+
+	for {
+		batch, err := q.Pop(ctx, 5)
+		if err == chunkqueue.ErrQueueClosed {
+			break
+		}
+		if err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		t.Log("Popped batch:", batch)
+	}
 }
