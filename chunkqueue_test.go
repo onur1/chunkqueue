@@ -13,7 +13,7 @@ import (
 )
 
 func TestPushPopBasic(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[int]()
+	q := chunkqueue.NewChunkQueue[int](16)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -37,7 +37,7 @@ func TestPushPopBasic(t *testing.T) {
 }
 
 func TestPushPopWithContextCancel(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[int]()
+	q := chunkqueue.NewChunkQueue[int](16)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -58,7 +58,7 @@ func TestPushPopWithContextCancel(t *testing.T) {
 }
 
 func TestPushPopWithContextTimeout(t *testing.T) {
-	queue := chunkqueue.NewChunkQueue[int]()
+	queue := chunkqueue.NewChunkQueue[int](16)
 	defer queue.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -108,7 +108,7 @@ func TestPushPopWithContextTimeout(t *testing.T) {
 }
 
 func TestPushPopClosedQueue(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[string]()
+	q := chunkqueue.NewChunkQueue[string](16)
 
 	// Close the queue
 	q.Close()
@@ -130,7 +130,7 @@ func TestPushPopClosedQueue(t *testing.T) {
 }
 
 func TestPopEmptyQueue(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[int]()
+	q := chunkqueue.NewChunkQueue[int](16)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -156,7 +156,7 @@ func TestPopEmptyQueue(t *testing.T) {
 }
 
 func TestPopBatchSize(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[string]()
+	q := chunkqueue.NewChunkQueue[string](16)
 	ctx := context.Background()
 
 	// Push 3 items
@@ -187,7 +187,7 @@ func TestPopBatchSize(t *testing.T) {
 }
 
 func TestLargeVolumePushPop(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[int]()
+	q := chunkqueue.NewChunkQueue[int](1000000)
 	ctx := context.Background()
 
 	const itemCount = 1_000_000
@@ -213,7 +213,7 @@ func TestLargeVolumePushPop(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[int]()
+	q := chunkqueue.NewChunkQueue[int](300)
 	ctx := context.Background()
 	const producerCount, consumerCount, itemsPerProducer = 3, 2, 100
 
@@ -279,7 +279,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestCloseDuringPushPop(t *testing.T) {
-	q := chunkqueue.NewChunkQueue[int]()
+	q := chunkqueue.NewChunkQueue[int](16)
 	ctx := context.Background()
 
 	go func() {
@@ -303,5 +303,68 @@ func TestCloseDuringPushPop(t *testing.T) {
 			t.Errorf("Unexpected error: %v", err)
 		}
 		t.Log("Popped batch:", batch)
+	}
+}
+
+func TestPushWhenQueueClosedMidWait(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int](2)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+
+	// Start a producer that will block due to the queue being full
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := q.Push(ctx, 1, 2, 3) // Push more items than the queue capacity
+		if err != chunkqueue.ErrQueueClosed {
+			t.Errorf("Expected ErrQueueClosed when pushing to closed queue, got: %v", err)
+		}
+	}()
+
+	// Allow some time for the producer to block
+	time.Sleep(100 * time.Millisecond)
+
+	// Close the queue while the producer is waiting
+	q.Close()
+
+	// Wait for the producer to finish
+	wg.Wait()
+}
+
+func TestWrapAround(t *testing.T) {
+	q := chunkqueue.NewChunkQueue[int](4)
+	ctx := context.Background()
+
+	// Fill the queue
+	for i := 0; i < 4; i++ {
+		err := q.Push(ctx, i)
+		if err != nil {
+			t.Fatalf("Unexpected error pushing item: %v", err)
+		}
+	}
+
+	// Pop two items
+	batch, err := q.Pop(ctx, 2)
+	if err != nil {
+		t.Fatalf("Unexpected error popping items: %v", err)
+	}
+	if len(batch) != 2 || batch[0] != 0 || batch[1] != 1 {
+		t.Errorf("Expected popped batch: [0, 1], got: %v", batch)
+	}
+
+	// Push a new item, causing wrap-around
+	err = q.Push(ctx, 4)
+	if err != nil {
+		t.Fatalf("Unexpected error pushing item: %v", err)
+	}
+
+	// Pop the remaining items
+	batch, err = q.Pop(ctx, 3)
+	if err != nil {
+		t.Fatalf("Unexpected error popping items: %v", err)
+	}
+	if len(batch) != 2 || batch[0] != 2 || batch[1] != 3 {
+		t.Errorf("Expected popped batch: [2, 3], got: %v", batch)
 	}
 }
