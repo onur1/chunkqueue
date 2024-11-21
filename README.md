@@ -106,6 +106,14 @@ ReadChunk() ([]T, bool)
 
 Reads a chunk of up to `maxChunk` items from the queue. Blocks until items are available or the queue is closed. Returns the chunk and a boolean indicating success.
 
+### `ReadChunkWithContext`
+
+```go
+ReadChunkWithContext() (context.Context, []T, bool)
+```
+
+Like `ReadChunk`, but the wait operation can be cancelled using the provided context.
+
 ### `Close`
 
 ```go

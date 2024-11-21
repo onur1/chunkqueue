@@ -1,6 +1,7 @@
 package chunkqueue
 
 import (
+	"context"
 	"errors"
 	"sync"
 )
@@ -74,6 +75,39 @@ func (q *ChunkQueue[T]) ReadChunk() ([]T, bool) {
 	q.data = q.data[n:]
 
 	return chunk, true
+}
+
+// ReadChunkWithContext reads a chunk of up to maxChunk items from the queue.
+// The wait operation can be cancelled using the provided context.
+func (q *ChunkQueue[T]) ReadChunkWithContext(ctx context.Context) ([]T, bool, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		default:
+		}
+
+		if len(q.data) > 0 {
+			n := q.maxChunk
+			if len(q.data) < n {
+				n = len(q.data)
+			}
+
+			chunk := q.data[:n]
+			q.data = q.data[n:]
+
+			return chunk, true, nil
+		}
+
+		if q.isClosed {
+			return nil, false, nil
+		}
+
+		q.cond.Wait()
+	}
 }
 
 // Close marks the queue as closed.
