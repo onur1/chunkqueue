@@ -2,11 +2,6 @@
 
 `ChunkQueue` is a thread-safe, generic queue with support for chunk-based reading.
 
-## Features
-
-- **Chunked Reading**: Retrieve items in configurable chunk sizes.
-- **Thread-safe**: Multiple producers and consumers can safely access the queue concurrently.
-
 ## Installation
 
 ```bash
